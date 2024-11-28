@@ -3,7 +3,9 @@ import os
 
 from jinja2 import Environment, StrictUndefined
 
+from cover_agent.AICaller import AICaller
 from cover_agent.settings.config_loader import get_settings
+from cover_agent.utils import load_yaml
 
 MAX_TESTS_PER_RUN = 4
 
@@ -25,7 +27,7 @@ ADDITIONAL_INSTRUCTIONS_TEXT = """
 
 FAILED_TESTS_TEXT = """
 ## Previous Iterations Failed Tests
-Below is a list of failed tests that you generated in previous iterations. Do not generate the same tests again, and take the failed tests into account when generating new tests.
+Below is a list of failed tests that were generated in previous iterations. Do not generate the same tests again, and take the failed tests into account when generating new tests.
 ======
 {failed_test_runs}
 ======
@@ -108,6 +110,7 @@ class PromptBuilder:
 
         self.stdout_from_run = ""
         self.stderr_from_run = ""
+        self.processed_test_file = ""
 
     def _read_file(self, file_path):
         """
@@ -184,6 +187,7 @@ class PromptBuilder:
             "testing_framework": self.testing_framework,
             "stdout": self.stdout_from_run,
             "stderr": self.stderr_from_run,
+            "processed_test_file": self.processed_test_file,
         }
         environment = Environment(undefined=StrictUndefined)
         try:
@@ -200,3 +204,26 @@ class PromptBuilder:
             return {"system": "", "user": ""}
 
         return {"system": system_prompt, "user": user_prompt}
+
+
+def adapt_test_command_for_a_single_test_via_ai(args, test_file_relative_path, test_command):
+    try:
+        variables = {"project_root_dir": args.test_command_dir,
+                     "test_file_relative_path": test_file_relative_path,
+                     "test_command": test_command,
+                     }
+        ai_caller = AICaller(model=args.model)
+        environment = Environment(undefined=StrictUndefined)
+        system_prompt = environment.from_string(get_settings().adapt_test_command_for_a_single_test_via_ai.system).render(
+            variables)
+        user_prompt = environment.from_string(get_settings().adapt_test_command_for_a_single_test_via_ai.user).render(
+            variables)
+        response, prompt_token_count, response_token_count = (
+            ai_caller.call_model(prompt={"system": system_prompt, "user": user_prompt}, stream=False)
+        )
+        response_yaml = load_yaml(response)
+        new_command_line = response_yaml["new_command_line"].strip()
+        return new_command_line
+    except Exception as e:
+        logging.error(f"Error adapting test command: {e}")
+        return None
